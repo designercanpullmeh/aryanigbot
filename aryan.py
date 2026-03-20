@@ -5,6 +5,7 @@ import json
 import threading
 import requests
 import time
+import random
 from collections import defaultdict
 from flask import Flask, jsonify, Response
 from instagrapi import Client
@@ -18,9 +19,23 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-ACC_FILE = os.getenv("ACC_FILE", "acc.txt")
-MESSAGE_FILE = os.getenv("MESSAGE_FILE", "text.txt")
-TITLE_FILE = os.getenv("TITLE_FILE", "nc.txt")
+ACC_COUNT = int(os.getenv("ACC_COUNT", "0"))
+MESSAGE_DATA = os.getenv("MESSAGE_DATA", "")
+_raw_titles = os.getenv("TITLES", "")
+def parse_titles(raw: str):
+    raw = raw.strip()
+    if raw.startswith("(") and raw.endswith(")"):
+        raw = raw[1:-1]
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    titles = []
+    for p in parts:
+        if (p.startswith('"') and p.endswith('"')) or (p.startswith("'") and p.endswith("'")):
+            titles.append(p[1:-1])
+        else:
+            titles.append(p)
+    return titles
+
+TITLES = parse_titles(_raw_titles)
 
 MSG_DELAY = int(os.getenv("MSG_DELAY", 40))
 GROUP_DELAY = int(os.getenv("GROUP_DELAY", 4))
@@ -145,26 +160,21 @@ def start_flask():
     logg.disabled = True
     app.run(host=FLASK_HOST, port=FLASK_PORT, debug=False, use_reloader=False)
 
-def load_accounts(path):
+def load_accounts_from_env():
     accounts = []
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            parts = line.strip().split("|")
-            if len(parts) >= 2:
-                username = parts[0].strip()
-                password = parts[1].strip()
-                proxy = parts[2].strip() if len(parts) >= 3 and parts[2].strip() else None
-                accounts.append((username, password, proxy))
+    for i in range(1, ACC_COUNT + 1):
+        user = os.getenv(f"ACC_{i}_USER", "").strip()
+        password = os.getenv(f"ACC_{i}_PASS", "").strip()
+        proxy = os.getenv(f"ACC_{i}_PROXY", "").strip()
+        if user and password:
+            accounts.append((user, password, proxy or None))
     return accounts[:5]
 
-def load_lines(path):
-    with open(path, "r", encoding="utf-8") as f:
-        return [x.strip() for x in f if x.strip()]
+def load_titles_from_env():
+    return TITLES[:] if TITLES else []
 
-def load_message_blocks(path):
-    with open(path, "r", encoding="utf-8") as f:
-        content = f.read()
-    raw_blocks = content.split(",")
+def load_message_blocks_from_env():
+    raw_blocks = MESSAGE_DATA.split(",")
     blocks = []
     for block in raw_blocks:
         cleaned = block.strip("\n")
@@ -236,60 +246,91 @@ def rename_thread(cl, thread_id, title):
     except Exception:
         return False
 
+async def gc_send_loop(username, cl, gid, index, total, get_block, delay):
+    i = 1
+    while True:
+        active_block = get_block()
+        if active_block:
+            try:
+                await asyncio.to_thread(cl.direct_send, active_block, thread_ids=[gid])
+            except Exception:
+                pass
+            ui_log(username, f"📨 → GC {index}/{total} | SEND {i}")
+        i += 1
+        await asyncio.sleep(delay)
+
+async def gc_rename_loop(username, cl, gid, get_titles, delay):
+    last_title = None
+    used = set()
+    j = 1
+    while True:
+        titles = get_titles()
+        if not titles:
+            await asyncio.sleep(delay)
+            continue
+
+        available = [t for t in titles if t != last_title and t not in used]
+        if not available:
+            used.clear()
+            available = [t for t in titles if t != last_title]
+
+        title = random.choice(available)
+        used.add(title)
+        last_title = title
+
+        try:
+            success = await asyncio.to_thread(rename_thread, cl, gid, title)
+            if success:
+                ui_log(username, f"💠 → {title} | GC RENAME {j}")
+            else:
+                ui_log(username, "⚠ Rename failed")
+        except Exception:
+            ui_log(username, "⚠ Rename error")
+
+        j += 1
+        await asyncio.sleep(delay)
+
 async def worker(username, password, proxy, cl):
     round_number = 1
     while True:
         try:
-            threads = await asyncio.to_thread(cl.direct_threads, amount=30)
+            threads = await asyncio.to_thread(cl.direct_threads, amount=100)
         except Exception:
             await asyncio.sleep(60)
             continue
+
         groups = [t for t in threads if getattr(t, "is_group", False)]
         total = len(groups)
         if total == 0:
             await asyncio.sleep(60)
             continue
+
         ui_log(username, f"⏳ ROUND {round_number} | GCS → {total}")
-        titles = load_lines(TITLE_FILE) if os.path.exists(TITLE_FILE) else []
-        active_title = None
-        if titles:
-            rename_index = (round_number - 1) // 5
-            title_index = rename_index % len(titles)
-            active_title = titles[title_index]
-        active_block = None
-        if MESSAGE_BLOCKS:
-            block_index = (round_number - 1) % len(MESSAGE_BLOCKS)
-            active_block = MESSAGE_BLOCKS[block_index]
+
+        titles_snapshot = load_titles_from_env()
+
+        def get_titles():
+            return titles_snapshot
+
+        def get_block():
+            if not MESSAGE_BLOCKS:
+                return None
+            idx = (round_number - 1) % len(MESSAGE_BLOCKS)
+            return MESSAGE_BLOCKS[idx]
+
+        tasks = []
         for index, thread in enumerate(groups, start=1):
             gid = thread.id
-            if active_block:
-                try:
-                    await asyncio.to_thread(cl.direct_send, active_block, thread_ids=[gid])
-                except Exception:
-                    pass
-                await asyncio.sleep(MSG_DELAY)
-                ui_log(username, f"📨 → GC {index}/{total}")
-            if active_title:
-                current_title = thread.thread_title or ""
-                if current_title != active_title:
-                    try:
-                        success = await asyncio.to_thread(rename_thread, cl, gid, active_title)
-                        if success:
-                            ui_log(username, f"💠 → {active_title}")
-                        else:
-                            ui_log(username, "⚠ Rename failed")
-                    except Exception:
-                        ui_log(username, "⚠ Rename error")
-                else:
-                    ui_log(username, f"💠 OK → {active_title}")
-        ui_log(username, f"✔ ROUND {round_number} Complete")
+            tasks.append(asyncio.create_task(gc_send_loop(username, cl, gid, index, total, get_block, MSG_DELAY)))
+            tasks.append(asyncio.create_task(gc_rename_loop(username, cl, gid, get_titles, 240)))
+
+        await asyncio.gather(*tasks)
         round_number += 1
-        await asyncio.sleep(90)
 
 async def main():
-    ACCOUNTS = load_accounts(ACC_FILE)
+    ACCOUNTS = load_accounts_from_env()
     global MESSAGE_BLOCKS
-    MESSAGE_BLOCKS = load_message_blocks(MESSAGE_FILE) if os.path.exists(MESSAGE_FILE) else []
+    MESSAGE_BLOCKS = load_message_blocks_from_env()
     clients = []
     for username, password, proxy in ACCOUNTS:
         cl = await login(username, password, proxy)
