@@ -350,6 +350,6 @@ async def main():
             await asyncio.sleep(0.2)
 
 if __name__ == "__main__":
-    threading.Thread(target=start_flask, daemon=True).start()
     threading.Thread(target=self_ping_loop, daemon=True).start()
-    asyncio.run(main())
+    threading.Thread(target=lambda: asyncio.run(main()), daemon=True).start()
+    start_flask()
