@@ -5,6 +5,7 @@ import json
 import threading
 import requests
 import time
+import random
 from collections import defaultdict
 from flask import Flask, jsonify, Response
 from instagrapi import Client
@@ -25,7 +26,6 @@ TITLE_FILE = os.getenv("TITLE_FILE", "nc.txt")
 MSG_DELAY = int(os.getenv("MSG_DELAY", 40))
 GROUP_DELAY = int(os.getenv("GROUP_DELAY", 4))
 
-DOC_ID = os.getenv("DOC_ID", "29088580780787855")
 IG_APP_ID = os.getenv("IG_APP_ID", "936619743392459")
 
 FLASK_HOST = os.getenv("FLASK_HOST", "0.0.0.0")
@@ -41,6 +41,9 @@ logs_ui = defaultdict(list)
 console = Console()
 USERS = []
 MESSAGE_BLOCKS = []
+
+# 🔥 RANDOM EMOJIS LIST
+EMOJIS = ["🔥","⚡","💀","😈","🚀","💎","🎯","👑","🖤","✨","🌪️","🧨","🎭","🐍","🧿"]
 
 @app.route('/')
 def home():
@@ -67,43 +70,15 @@ def logs_route():
 
 @app.route("/dashboard")
 def dashboard():
-    html = """
-    <html>
-    <head>
-        <title>SINISTERS | SX⁷</title>
-        <meta http-equiv="refresh" content="2">
-        <style>
-            body { background-color: #0d1117; font-family: monospace; margin: 0; padding: 20px; color: #00ff88; }
-            .header { text-align: center; font-size: 28px; font-weight: bold; margin-bottom: 30px; border: 2px solid #00ff88; padding: 10px; }
-            .container { display: flex; flex-direction: row; gap: 20px; align-items: flex-start; }
-            .panel { flex: 1; min-width: 300px; border: 2px solid #00ff88; background-color: #111827; padding: 15px; height: 80vh; overflow-y: auto; }
-            .panel-title { font-weight: bold; margin-bottom: 10px; border-bottom: 1px solid #00ff88; padding-bottom: 5px; }
-            .log-line { margin-bottom: 6px; white-space: pre-wrap; }
-        </style>
-    </head>
-    <body>
-        <div class="header">✦ SINISTERS | SX⁷ ✦</div>
-        <div class="container">
-    """
+    html = "<html><body style='background:#0d1117;color:#00ff88;font-family:monospace;'>"
+    html += "<h1 style='text-align:center;'>SINISTERS | SX⁷</h1><div style='display:flex;'>"
     for user in USERS:
-        html += f'<div class="panel"><div class="panel-title">{user}</div>'
+        html += f"<div style='margin:10px;border:1px solid #00ff88;padding:10px;width:300px;'>"
+        html += f"<h3>{user}</h3>"
         for line in logs_ui[user]:
-            html += f'<div class="log-line">{line}</div>'
+            html += f"<div>{line}</div>"
         html += "</div>"
-    html += """
-        </div>
-        <script>
-        function scrollPanels() {
-            document.querySelectorAll('.panel').forEach(function(panel) {
-                panel.scrollTop = panel.scrollHeight;
-            });
-        }
-        window.onload = scrollPanels;
-        setInterval(scrollPanels, 1500);
-        </script>
-    </body>
-    </html>
-    """
+    html += "</div></body></html>"
     return html
 
 def log(console_message, clean_message=None):
@@ -114,35 +89,18 @@ def self_ping_loop():
         if SELF_URL:
             try:
                 requests.get(SELF_URL, timeout=10)
-                log("🔁 Self ping successful")
-            except Exception as e:
-                log(f"⚠ Self ping failed: {e}")
+            except:
+                pass
         time.sleep(SELF_PING_INTERVAL)
 
-MAX_PANEL_LINES = 35
-
 def ui_log(user, message):
-    if message.startswith("⏳ ROUND"):
-        header = logs_ui[user][0] if logs_ui[user] else f"🍸 ID - {user}"
-        logs_ui[user] = [header, message]
-        log(f"{user} | {message}", message)
-        return
     logs_ui[user].append(message)
-    if len(logs_ui[user]) < 2:
-        log(f"{user} | {message}", message)
-        return
-    header = logs_ui[user][0]
-    round_line = logs_ui[user][1]
-    body = logs_ui[user][2:]
-    if len(body) > MAX_PANEL_LINES:
-        body.pop(0)
-    logs_ui[user] = [header, round_line] + body
-    log(f"{user} | {message}", message)
+    if len(logs_ui[user]) > 40:
+        logs_ui[user].pop(0)
 
 def start_flask():
     import logging
-    logg = logging.getLogger('werkzeug')
-    logg.disabled = True
+    logging.getLogger('werkzeug').disabled = True
     app.run(host=FLASK_HOST, port=FLASK_PORT, debug=False, use_reloader=False)
 
 def load_accounts(path):
@@ -153,7 +111,7 @@ def load_accounts(path):
             if len(parts) >= 2:
                 username = parts[0].strip()
                 password = parts[1].strip()
-                proxy = parts[2].strip() if len(parts) >= 3 and parts[2].strip() else None
+                proxy = parts[2].strip() if len(parts) >= 3 else None
                 accounts.append((username, password, proxy))
     return accounts[:5]
 
@@ -163,38 +121,7 @@ def load_lines(path):
 
 def load_message_blocks(path):
     with open(path, "r", encoding="utf-8") as f:
-        content = f.read()
-    raw_blocks = content.split(",")
-    blocks = []
-    for block in raw_blocks:
-        cleaned = block.strip("\n")
-        if cleaned.strip():
-            blocks.append(cleaned)
-    return blocks
-
-def build_layout():
-    layout = Layout()
-    layout.split_column(Layout(name="header", size=6), Layout(name="body"))
-    layout["body"].split_row(*[Layout(name=user) for user in USERS])
-    header_layout = Layout()
-    header_layout.split_column(
-        Layout(Panel(Align.center("[bold bright_green]SINISTERS | SX⁷[/bold bright_green]"), border_style="bright_green"), size=3),
-        Layout(Panel(Align.center("[bold bright_green]MAHABHARAT | ASTRA[/bold bright_green]"), border_style="bright_green"), size=3),
-    )
-    layout["header"].update(header_layout)
-    return layout
-
-def render_layout(layout):
-    for user in USERS:
-        content = "\n".join(logs_ui[user])
-        panel = Panel(
-            content,
-            title=f"[bold bright_green]{user}[/bold bright_green]",
-            border_style="bright_green",
-            padding=(0, 1),
-            expand=True
-        )
-        layout["body"][user].update(panel)
+        return [x.strip() for x in f.read().split(",") if x.strip()]
 
 def setup_mobile_fingerprint(cl):
     cl.set_user_agent("Instagram 312.0.0.22.114 Android")
@@ -217,96 +144,97 @@ async def login(username, password, proxy):
     if proxy:
         cl.set_proxy(proxy)
     setup_mobile_fingerprint(cl)
-    session_file = f"session_{username}.json"
     try:
-        if os.path.exists(session_file):
-            cl.load_settings(session_file)
         cl.login(username, password)
-        cl.dump_settings(session_file)
         return cl
-    except Exception:
+    except:
         return None
+
+# 🔥 ADD EMOJI HERE
+def add_random_emoji(title):
+    return f"{title} {random.choice(EMOJIS)}"
 
 def rename_thread(cl, thread_id, title):
     try:
-        cl.private_request(f"direct_v2/threads/{thread_id}/update_title/", data={"title": title})
-        return True
-    except RateLimitError:
-        return False
-    except Exception:
-        return False
+        title = add_random_emoji(title)  # 🔥 emoji added here
+        cl.private_request(
+            f"direct_v2/threads/{thread_id}/update_title/",
+            data={"title": title}
+        )
+        return title
+    except:
+        return None
+
+async def gc_send_loop(username, cl, gid, get_block):
+    i = 1
+    while True:
+        block = get_block()
+        if block:
+            try:
+                await asyncio.to_thread(cl.direct_send, block, thread_ids=[gid])
+                ui_log(username, f"📨 Sent {i}")
+            except:
+                pass
+        i += 1
+        await asyncio.sleep(MSG_DELAY)
+
+async def gc_rename_loop(username, cl, gid, get_titles):
+    while True:
+        titles = get_titles()
+        if titles:
+            title = random.choice(titles)
+            new_title = await asyncio.to_thread(rename_thread, cl, gid, title)
+            if new_title:
+                ui_log(username, f"💠 {new_title}")
+            else:
+                ui_log(username, "⚠ Rename failed")
+        await asyncio.sleep(240)
 
 async def worker(username, password, proxy, cl):
-    round_number = 1
     while True:
         try:
-            threads = await asyncio.to_thread(cl.direct_threads, amount=30)
-        except Exception:
+            threads = await asyncio.to_thread(cl.direct_threads, amount=50)
+            groups = [t for t in threads if getattr(t, "is_group", False)]
+        except:
             await asyncio.sleep(60)
             continue
-        groups = [t for t in threads if getattr(t, "is_group", False)]
-        total = len(groups)
-        if total == 0:
+
+        if not groups:
             await asyncio.sleep(60)
             continue
-        ui_log(username, f"⏳ ROUND {round_number} | GCS → {total}")
+
         titles = load_lines(TITLE_FILE) if os.path.exists(TITLE_FILE) else []
-        active_title = None
-        if titles:
-            rename_index = (round_number - 1) // 5
-            title_index = rename_index % len(titles)
-            active_title = titles[title_index]
-        active_block = None
-        if MESSAGE_BLOCKS:
-            block_index = (round_number - 1) % len(MESSAGE_BLOCKS)
-            active_block = MESSAGE_BLOCKS[block_index]
-        for index, thread in enumerate(groups, start=1):
+
+        def get_titles():
+            return titles
+
+        def get_block():
+            return random.choice(MESSAGE_BLOCKS) if MESSAGE_BLOCKS else None
+
+        for thread in groups:
             gid = thread.id
-            if active_block:
-                try:
-                    await asyncio.to_thread(cl.direct_send, active_block, thread_ids=[gid])
-                except Exception:
-                    pass
-                await asyncio.sleep(MSG_DELAY)
-                ui_log(username, f"📨 → GC {index}/{total}")
-            if active_title:
-                current_title = thread.thread_title or ""
-                if current_title != active_title:
-                    try:
-                        success = await asyncio.to_thread(rename_thread, cl, gid, active_title)
-                        if success:
-                            ui_log(username, f"💠 → {active_title}")
-                        else:
-                            ui_log(username, "⚠ Rename failed")
-                    except Exception:
-                        ui_log(username, "⚠ Rename error")
-                else:
-                    ui_log(username, f"💠 OK → {active_title}")
-        ui_log(username, f"✔ ROUND {round_number} Complete")
-        round_number += 1
-        await asyncio.sleep(90)
+            asyncio.create_task(gc_send_loop(username, cl, gid, get_block))
+            asyncio.create_task(gc_rename_loop(username, cl, gid, get_titles))
+
+        await asyncio.sleep(999999)
 
 async def main():
     ACCOUNTS = load_accounts(ACC_FILE)
     global MESSAGE_BLOCKS
-    MESSAGE_BLOCKS = load_message_blocks(MESSAGE_FILE) if os.path.exists(MESSAGE_FILE) else []
+    MESSAGE_BLOCKS = load_message_blocks(MESSAGE_FILE)
+
     clients = []
     for username, password, proxy in ACCOUNTS:
         cl = await login(username, password, proxy)
         if cl:
             USERS.append(username)
-            ui_log(username, f"🍸 ID - {username}")
             clients.append((username, password, proxy, cl))
-    if not USERS:
-        return
-    layout = build_layout()
+
     for u, p, pr, cl in clients:
         asyncio.create_task(worker(u, p, pr, cl))
-    with Live(layout, console=console, refresh_per_second=5, screen=True) as live:
-        while True:
-            render_layout(layout)
-            live.refresh()
-            await asyncio.sleep(0.2)
+
+    while True:
+        await asyncio.sleep(1)
 
 if __name__ == "__main__":
     threading.Thread(target=start_flask, daemon=True).start()
