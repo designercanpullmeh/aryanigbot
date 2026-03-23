@@ -19,23 +19,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-ACC_COUNT = int(os.getenv("ACC_COUNT", "0"))
-MESSAGE_DATA = os.getenv("MESSAGE_DATA", "")
-_raw_titles = os.getenv("TITLES", "")
-def parse_titles(raw: str):
-    raw = raw.strip()
-    if raw.startswith("(") and raw.endswith(")"):
-        raw = raw[1:-1]
-    parts = [p.strip() for p in raw.split(",") if p.strip()]
-    titles = []
-    for p in parts:
-        if (p.startswith('"') and p.endswith('"')) or (p.startswith("'") and p.endswith("'")):
-            titles.append(p[1:-1])
-        else:
-            titles.append(p)
-    return titles
-
-TITLES = parse_titles(_raw_titles)
+ACC_FILE = os.getenv("ACC_FILE", "acc.txt")
+MESSAGE_FILE = os.getenv("MESSAGE_FILE", "text.txt")
+TITLE_FILE = os.getenv("TITLE_FILE", "nc.txt")
 
 MSG_DELAY = int(os.getenv("MSG_DELAY", 40))
 GROUP_DELAY = int(os.getenv("GROUP_DELAY", 4))
@@ -160,21 +146,26 @@ def start_flask():
     logg.disabled = True
     app.run(host=FLASK_HOST, port=FLASK_PORT, debug=False, use_reloader=False)
 
-def load_accounts_from_env():
+def load_accounts(path):
     accounts = []
-    for i in range(1, ACC_COUNT + 1):
-        user = os.getenv(f"ACC_{i}_USER", "").strip()
-        password = os.getenv(f"ACC_{i}_PASS", "").strip()
-        proxy = os.getenv(f"ACC_{i}_PROXY", "").strip()
-        if user and password:
-            accounts.append((user, password, proxy or None))
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            parts = line.strip().split("|")
+            if len(parts) >= 2:
+                username = parts[0].strip()
+                password = parts[1].strip()
+                proxy = parts[2].strip() if len(parts) >= 3 and parts[2].strip() else None
+                accounts.append((username, password, proxy))
     return accounts[:5]
 
-def load_titles_from_env():
-    return TITLES[:] if TITLES else []
+def load_lines(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return [x.strip() for x in f if x.strip()]
 
-def load_message_blocks_from_env():
-    raw_blocks = MESSAGE_DATA.split(",")
+def load_message_blocks(path):
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+    raw_blocks = content.split(",")
     blocks = []
     for block in raw_blocks:
         cleaned = block.strip("\n")
@@ -307,10 +298,11 @@ async def worker(username, password, proxy, cl):
 
         ui_log(username, f"⏳ ROUND {round_number} | GCS → {total}")
 
-        titles_snapshot = load_titles_from_env()
+        # snapshot titles for this account
+        titles = load_lines(TITLE_FILE) if os.path.exists(TITLE_FILE) else []
 
         def get_titles():
-            return titles_snapshot
+            return titles
 
         def get_block():
             if not MESSAGE_BLOCKS:
@@ -324,13 +316,16 @@ async def worker(username, password, proxy, cl):
             tasks.append(asyncio.create_task(gc_send_loop(username, cl, gid, index, total, get_block, MSG_DELAY)))
             tasks.append(asyncio.create_task(gc_rename_loop(username, cl, gid, get_titles, 240)))
 
+        # from here, keep loops running forever for this account
         await asyncio.gather(*tasks)
+
+        # practically never reached, but keep round counter for consistency
         round_number += 1
 
 async def main():
-    ACCOUNTS = load_accounts_from_env()
+    ACCOUNTS = load_accounts(ACC_FILE)
     global MESSAGE_BLOCKS
-    MESSAGE_BLOCKS = load_message_blocks_from_env()
+    MESSAGE_BLOCKS = load_message_blocks(MESSAGE_FILE) if os.path.exists(MESSAGE_FILE) else []
     clients = []
     for username, password, proxy in ACCOUNTS:
         cl = await login(username, password, proxy)
@@ -350,6 +345,6 @@ async def main():
             await asyncio.sleep(0.2)
 
 if __name__ == "__main__":
+    threading.Thread(target=start_flask, daemon=True).start()
     threading.Thread(target=self_ping_loop, daemon=True).start()
-    threading.Thread(target=lambda: asyncio.run(main()), daemon=True).start()
-    start_flask()
+    asyncio.run(main())
